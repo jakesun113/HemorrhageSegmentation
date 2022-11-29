@@ -16,9 +16,10 @@ out_location = location where you want to save processed images
 outfiles are as follows:
 
 ncct.nii.gz: NIFTI file for the NCCT
+ncct_small.nii.gz: Downsampled NCCT
 kMeans.nii.gz: output of the KMeans segmentation (downsampled)
-levelSets.nii.gz: output of Level Sets segmentation (downsampled)
-levelSets_morph.nii.gz: segmentation with morphological operations (downsampled)
+ls.nii.gz: output of Level Sets segmentation (downsampled)
+ls_morph.nii.gz: segmentation with morphological operations (downsampled)
 brain_mask.nii.gz: final brain mask
 ncct_stripped.nii.gz: final result, original image with skull stripped
 
@@ -50,8 +51,9 @@ def main(ncct_location, out_location):
     # DOWNSAMPLE
     ################
 
-    fixedSmall = sitk.Shrink(fixed, [3, 3, 3])
+    fixedSmall = sitk.Shrink(fixed, [3, 3, 1])
 
+    sitk.WriteImage(fixedSmall, os.path.join(out_location, 'ncct_small.nii.gz'))
     minPixelSpacing = min(fixedSmall.GetSpacing())
     dimension = fixedSmall.GetDimension()
     timeStep = minPixelSpacing / (2 ** (dimension + 1))
@@ -117,7 +119,6 @@ def main(ncct_location, out_location):
     sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(MAX_THREADS)
 
     init_ls = sitk.SignedMaurerDistanceMap(outputImage == 1, True, True, True)
-    # sitk.WriteImage(sitk.Cast(init_ls, sitk.sitkInt16), 'init_ls_CSF.nii.gz')
     lsFilter = sitk.ThresholdSegmentationLevelSetImageFilter()
     lsFilter.SetLowerThreshold(5)
     lsFilter.SetUpperThreshold(300)
@@ -131,17 +132,21 @@ def main(ncct_location, out_location):
     ls = lsFilter.Execute(init_ls, sitk.Cast(fixedSmall, init_ls.GetPixelID()))
 
     lsBin = sitk.BinaryThreshold(ls, lowerThreshold=0, upperThreshold=100)
-    lsBin = sitk.OpeningByReconstruction(lsBin, (6, 6, 6), sitk.sitkBall)
+    lsBin = sitk.OpeningByReconstruction(lsBin, (3, 3, 3), sitk.sitkBall)
     fixedSmall_masked = sitk.Cast(lsBin, 8) * fixedSmooth
     fixedSmall_masked = sitk.BinaryThreshold(fixedSmall_masked, lowerThreshold=0.1, upperThreshold=250)
     lsBin = fixedSmall_masked > 0
-    sitk.WriteImage(lsBin, os.path.join(out_location, 'levelSets.nii.gz'))
+    sitk.WriteImage(lsBin, os.path.join(out_location, 'ls.nii.gz'))
     # morphological operations
     lsBin = sitk.BinaryFillhole(lsBin)
     lsBin = sitk.BinaryMorphologicalOpening(lsBin, (2, 2, 2), sitk.sitkBall)
+
     lsBin_filled = sitk.BinaryMorphologicalClosing(lsBin, (2, 2, 2), sitk.sitkBall)
-    lsBin_filled = sitk.BinaryErode(sitk.BinaryFillhole(lsBin_filled), (1, 1, 1), sitk.sitkBall)
-    sitk.WriteImage(lsBin_filled, os.path.join(out_location, 'levelSets_morph.nii.gz'))
+
+    lsBin_filled = sitk.BinaryFillhole(lsBin_filled)
+
+    lsBin_filled = sitk.BinaryErode(lsBin_filled, (1, 1, 1), sitk.sitkBall)
+    sitk.WriteImage(lsBin_filled, os.path.join(out_location, 'ls_morph.nii.gz'))
 
     # Set the last slice to 0 (top of skull in case of poor patient placement)
     zeroedSlice = sitk.JoinSeries(lsBin_filled[:, :, 0] * 0)
